@@ -10,21 +10,32 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		scalePipelines(1, 100)
-		return
+	var mode string
+	if len(os.Args) >= 2 {
+		mode = os.Args[1]
 	}
-	switch os.Args[1] {
+
+	numTasks := 100
+	start := time.Now()
+	switch mode {
+	case "":
+		scalePipelines(1, numTasks)
 	case "-stage10":
-		scaleStages(10, 100)
+		scaleStages(10, numTasks)
 	case "-stage20":
-		scaleStages(20, 100)
-	case "-pipeline":
-		scalePipelines(10, 100)
+		scaleStages(20, numTasks)
+	case "-pipeline10":
+		scalePipelines(10, numTasks)
+	case "-pipeline20":
+		scalePipelines(20, numTasks)
 	default:
-		fmt.Fprintf(os.Stderr, "Usage: [-stage10 | -stage20 | -pipeline]")
+		fmt.Fprintf(os.Stderr, "Usage: [-stage10 | -stage20 | -pipeline10 | -pipeline20]")
 		os.Exit(1)
 	}
+
+	duration := time.Since(start)
+	throughput := float64(numTasks) / duration.Seconds()
+	fmt.Printf("Throughput: %0.1f/s\n", throughput)
 }
 
 func scalePipelines(numPipelines int, limit int) {

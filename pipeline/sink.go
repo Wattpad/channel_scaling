@@ -82,12 +82,10 @@ func (s *Sink) Run(in <-chan interface{}) {
 		step := <-s.pool
 		t3 := time.Now()
 		fmt.Printf("%s,%d,Saturation,%d\n", s.id, x.Id, t3.Sub(t2).Microseconds())
-		go func(x Item, t3 time.Time) {
+		go func(x Item) {
 			defer s.Recycle(step)
 			_ = step.Exec(x)
-			t4 := time.Now()
-			fmt.Printf("%s,%d,Active,%d\n", s.id, x.Id, t4.Sub(t3).Microseconds())
-		}(x, t3)
+		}(x)
 		t1 = t3
 		fmt.Printf("%s,%d,Duration,%d\n", s.id, x.Id, time.Since(x.Start).Microseconds())
 	}

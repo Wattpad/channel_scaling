@@ -23,6 +23,31 @@ func (s *DelayStep) Exec(x interface{}) interface{} {
 	return x
 }
 
+type SourceStep struct {
+	counter   int
+	increment int
+}
+
+func NewSourceStep() *SourceStep {
+	return &SourceStep{
+		increment: 1,
+	}
+}
+
+func (s *SourceStep) SetInitial(x int) {
+	s.counter = x
+}
+
+func (s *SourceStep) SetIncrement(x int) {
+	s.increment = x
+}
+
+func (s *SourceStep) Exec(_ interface{}) interface{} {
+	x := s.counter
+	s.counter += s.increment
+	return Item{Id: x, Start: time.Now()}
+}
+
 type SourceDelayStep struct {
 	// This leaks because we never call Stop() on it...
 	ticker    *time.Ticker

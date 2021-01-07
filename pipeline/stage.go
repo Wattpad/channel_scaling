@@ -89,19 +89,15 @@ func (s *Stage) Run(in <-chan interface{}, done <-chan struct{}) {
 		step := <-s.pool
 		t3 := time.Now()
 		fmt.Printf("%s,%d,Saturation,%d\n", s.id, x.Id, t3.Sub(t2).Microseconds())
-		go func(x Item, t3 time.Time) {
+		go func(x Item) {
 			defer s.Recycle(step)
 			y := step.Exec(x)
-			t4 := time.Now()
-			fmt.Printf("%s,%d,Active,%d\n", s.id, x.Id, t4.Sub(t3).Microseconds())
 			select {
 			case <-done:
 				return
 			case s.out <- y:
 			}
-			t5 := time.Now()
-			fmt.Printf("%s,%d,Transmission,%d\n", s.id, x.Id, t5.Sub(t4).Microseconds())
-		}(x, t3)
+		}(x)
 		t1 = t3
 	}
 	s.Drain()

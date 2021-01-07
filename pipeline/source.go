@@ -3,7 +3,6 @@ package pipeline
 import (
 	"fmt"
 	"os"
-	"time"
 )
 
 type Source struct {
@@ -37,7 +36,6 @@ func (s *Source) Cancel() {
 func (s *Source) Run(done <-chan struct{}) {
 	defer close(s.out)
 	step := s.stepFn()
-	t1 := time.Now()
 	for {
 		if s.cancelled {
 			break
@@ -46,16 +44,11 @@ func (s *Source) Run(done <-chan struct{}) {
 		if s.limit > 0 && x.Id >= s.limit {
 			break
 		}
-		t2 := time.Now()
-		fmt.Printf("%s,%d,Active,%d\n", s.id, x.Id, t2.Sub(t1).Microseconds())
 		select {
 		case s.out <- x:
 		case <-done:
 			fmt.Fprintf(os.Stderr, "%s: Received done signal, aborting write\n", s.id)
 			return
 		}
-		t3 := time.Now()
-		fmt.Printf("%s,%d,Transmission,%d\n", s.id, x.Id, t3.Sub(t2).Microseconds())
-		t1 = t3
 	}
 }
