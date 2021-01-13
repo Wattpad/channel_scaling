@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 	"sync"
@@ -10,49 +11,78 @@ import (
 )
 
 func main() {
-	var mode string
-	if len(os.Args) >= 2 {
-		mode = os.Args[1]
-	}
+	var stage bool
+	var pipeline bool
+	var concurrency int
+	var numTasks int
 
-	numTasks := 100
+	flag.BoolVar(&stage, "stage", false, "Apply concurrency at the stage level (default false)")
+	flag.BoolVar(&pipeline, "pipeline", false, "Apply concurrency at the pipeline level (default false)")
+	flag.IntVar(&concurrency, "concurrency", 1, "Maximum concurrency (default 1)")
+	flag.IntVar(&numTasks, "tasks", 100, "Number of tasks to run (default 100)")
+	flag.Parse()
+
 	start := time.Now()
-	switch mode {
-	case "":
-		scalePipelines(1, numTasks)
-	case "-stage10":
-		scaleStages(10, numTasks)
-	case "-stage20":
-		scaleStages(20, numTasks)
-	case "-pipeline10":
-		scalePipelines(10, numTasks)
-	case "-pipeline20":
-		scalePipelines(20, numTasks)
-	default:
-		fmt.Fprintf(os.Stderr, "Usage: [-stage10 | -stage20 | -pipeline10 | -pipeline20]")
-		os.Exit(1)
+	if stage {
+		if pipeline {
+			panic("Specify either -stage or -pipeline but not both")
+		}
+		scaleStages(concurrency, numTasks)
+	} else if pipeline {
+		scalePipelines(concurrency, numTasks)
+	} else {
+		scaleTransactions(concurrency, numTasks)
 	}
-
 	duration := time.Since(start)
 	throughput := float64(numTasks) / duration.Seconds()
-	fmt.Printf("Throughput: %0.1f/s\n", throughput)
+	fmt.Fprintf(os.Stderr, "Throughput: %0.1f/s\n", throughput)
 }
 
-func scalePipelines(numPipelines int, limit int) {
+func scaleTransactions(numTransactions int, limit int) {
 	fmt.Printf("Stage,Element,Step,Microseconds\n")
 
+	source := pipeline.NewSource("Stage 0", func() pipeline.Step { return pipeline.NewSourceStep() })
+	source.SetLimit(limit)
+
 	var wg sync.WaitGroup
-	var sources []*pipeline.Source
-	for i := 0; i < numPipelines; i++ {
-		initial := i
-		source := pipeline.NewSource("Stage 0", func() pipeline.Step {
-			step := pipeline.NewSourceDelayStep(20 * time.Millisecond)
-			step.SetInitial(initial)
-			step.SetIncrement(numPipelines)
-			return step
-		})
-		source.SetLimit(limit)
-		sources = append(sources, source)
+	for i := 0; i < numTransactions; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			step1 := pipeline.NewDelayStep(100 * time.Millisecond)
+			step2 := pipeline.NewDelayStep(200 * time.Millisecond)
+			step3 := pipeline.NewDelayStep(10 * time.Millisecond)
+			sink := pipeline.NewDelayStep(50 * time.Millisecond)
+			for x := range source.Out() {
+				sink.Exec(step3.Exec(step2.Exec(step1.Exec(x))))
+				x := x.(pipeline.Item)
+				fmt.Printf("Stage 4,%d,Duration,%d\n", x.Id, time.Since(x.Start).Microseconds())
+			}
+		}()
+	}
+
+	done := make(chan struct{})
+	defer close(done)
+	go source.Run(done)
+
+	wg.Wait()
+}
+
+func scalePipelines(maxConcurrency int, limit int) {
+	stepConcurrency := 5
+	if maxConcurrency < stepConcurrency {
+		panic("Insufficient concurrency to start a pipeline")
+	}
+
+	fmt.Printf("Stage,Element,Step,Microseconds\n")
+
+	source := pipeline.NewSource("Stage 0", func() pipeline.Step {
+		return pipeline.NewSourceStep()
+	})
+	source.SetLimit(limit)
+
+	var wg sync.WaitGroup
+	for concurrency := 0; concurrency+stepConcurrency <= maxConcurrency; concurrency += stepConcurrency {
 		stage1 := pipeline.NewStage("Stage 1", func() pipeline.Step {
 			return pipeline.NewDelayStep(100 * time.Millisecond)
 		})
@@ -65,7 +95,6 @@ func scalePipelines(numPipelines int, limit int) {
 		sink := pipeline.NewSink("Stage 4", func() pipeline.Step {
 			return pipeline.NewDelayStep(50 * time.Millisecond)
 		})
-		go source.Run(stage1.Done())
 		go stage1.Run(source.Out(), stage2.Done())
 		go stage2.Run(stage1.Out(), stage3.Done())
 		go stage3.Run(stage2.Out(), sink.Done())
@@ -76,43 +105,70 @@ func scalePipelines(numPipelines int, limit int) {
 		}()
 	}
 
-	/*
-		time.Sleep(3 * time.Second)
-		for _, source := range sources {
-			source.Cancel()
-		}
-	*/
+	done := make(chan struct{})
+	defer close(done)
+	go source.Run(done)
 
 	wg.Wait()
 }
 
-func scaleStages(maxParallel int, limit int) {
+func scaleStages(maxConcurrency int, limit int) {
+	concurrency := 5
+	if maxConcurrency < concurrency {
+		panic("Insufficient concurrency to start a pipeline")
+	}
+
 	fmt.Printf("Stage,Element,Step,Microseconds\n")
 
-	source := pipeline.NewSource("Stage 0", func() pipeline.Step {
-		return pipeline.NewSourceDelayStep(10 * time.Millisecond)
-	})
+	source := pipeline.NewSource("Stage 0", func() pipeline.Step { return pipeline.NewSourceStep() })
 	source.SetLimit(limit)
+
 	stage1 := pipeline.NewStage("Stage 1", func() pipeline.Step {
 		return pipeline.NewDelayStep(100 * time.Millisecond)
 	})
-	for i := 0; i < 9; i++ {
-		stage1.ScaleUp()
-	}
 	stage2 := pipeline.NewStage("Stage 2", func() pipeline.Step {
 		return pipeline.NewDelayStep(200 * time.Millisecond)
 	})
-	for i := 0; i < maxParallel; i++ {
-		stage2.ScaleUp()
-	}
 	stage3 := pipeline.NewStage("Stage 3", func() pipeline.Step {
 		return pipeline.NewDelayStep(10 * time.Millisecond)
 	})
 	sink := pipeline.NewSink("Stage 4", func() pipeline.Step {
 		return pipeline.NewDelayStep(50 * time.Millisecond)
 	})
-	for i := 0; i < 4; i++ {
-		sink.ScaleUp()
+
+	scaleFactors := []int{2, 1, 20, 4}
+	scalings := []int{1, 1, 1, 1}
+	for concurrency < maxConcurrency {
+		concurrency++
+		throughputs := []int{
+			scalings[0] * scaleFactors[0],
+			scalings[1] * scaleFactors[1],
+			scalings[2] * scaleFactors[2],
+			scalings[3] * scaleFactors[3],
+		}
+		min := throughputs[0]
+		if throughputs[1] < min {
+			min = throughputs[1]
+		}
+		if throughputs[2] < min {
+			min = throughputs[2]
+		}
+		if throughputs[3] < min {
+			min = throughputs[3]
+		}
+		if throughputs[0] == min {
+			stage1.ScaleUp()
+			scalings[0] += 1
+		} else if throughputs[1] == min {
+			stage2.ScaleUp()
+			scalings[1] += 1
+		} else if throughputs[2] == min {
+			stage3.ScaleUp()
+			scalings[2] += 1
+		} else {
+			sink.ScaleUp()
+			scalings[3] += 1
+		}
 	}
 
 	go source.Run(stage1.Done())
@@ -125,11 +181,6 @@ func scaleStages(maxParallel int, limit int) {
 		defer wg.Done()
 		sink.Run(stage3.Out())
 	}()
-
-	/*
-		time.Sleep(3 * time.Second)
-		source.Cancel()
-	*/
 
 	wg.Wait()
 }
