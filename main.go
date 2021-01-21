@@ -10,24 +10,38 @@ import (
 	"github.com/tonygoold/channel_scaling/pipeline"
 )
 
+type Tuning bool
+
+const (
+	Untuned = false
+	Tuned   = true
+)
+
 func main() {
 	var stage bool
+	var tuned bool
 	var pipeline bool
 	var concurrency int
 	var numTasks int
 
 	flag.BoolVar(&stage, "stage", false, "Apply concurrency at the stage level (default false)")
+	flag.BoolVar(&tuned, "tuned", false, "Use tuned stage level concurrency (default false)")
 	flag.BoolVar(&pipeline, "pipeline", false, "Apply concurrency at the pipeline level (default false)")
 	flag.IntVar(&concurrency, "concurrency", 1, "Maximum concurrency (default 1)")
 	flag.IntVar(&numTasks, "tasks", 100, "Number of tasks to run (default 100)")
 	flag.Parse()
 
+	if stage && pipeline {
+		panic("Specify either -stage or -pipeline but not both")
+	}
+
 	start := time.Now()
 	if stage {
-		if pipeline {
-			panic("Specify either -stage or -pipeline but not both")
+		if tuned {
+			scaleStages(concurrency, numTasks, Tuned)
+		} else {
+			scaleStages(concurrency, numTasks, Untuned)
 		}
-		scaleStages(concurrency, numTasks)
 	} else if pipeline {
 		scalePipelines(concurrency, numTasks)
 	} else {
@@ -49,11 +63,21 @@ func scaleTransactions(numTransactions int, limit int) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+
+			// To level the playing field with pipelines, generate a new task as soon as one is dequeued.
+			buf := make(chan interface{})
+			go func() {
+				defer close(buf)
+				for x := range source.Out() {
+					buf <- x
+				}
+			}()
+
 			step1 := pipeline.NewDelayStep(100 * time.Millisecond)
 			step2 := pipeline.NewDelayStep(200 * time.Millisecond)
 			step3 := pipeline.NewDelayStep(10 * time.Millisecond)
 			sink := pipeline.NewDelayStep(50 * time.Millisecond)
-			for x := range source.Out() {
+			for x := range buf {
 				sink.Exec(step3.Exec(step2.Exec(step1.Exec(x))))
 				x := x.(pipeline.Item)
 				fmt.Printf("Stage 4,%d,Duration,%d\n", x.Id, time.Since(x.Start).Microseconds())
@@ -112,7 +136,7 @@ func scalePipelines(maxConcurrency int, limit int) {
 	wg.Wait()
 }
 
-func scaleStages(maxConcurrency int, limit int) {
+func scaleStages(maxConcurrency int, limit int, tuning Tuning) {
 	concurrency := 5
 	if maxConcurrency < concurrency {
 		panic("Insufficient concurrency to start a pipeline")
@@ -136,7 +160,10 @@ func scaleStages(maxConcurrency int, limit int) {
 		return pipeline.NewDelayStep(50 * time.Millisecond)
 	})
 
-	scaleFactors := []int{2, 1, 20, 4}
+	scaleFactors := []int{2, 1, 2, 2}
+	if tuning == Tuned {
+		scaleFactors = []int{2, 1, 20, 4}
+	}
 	scalings := []int{1, 1, 1, 1}
 	for concurrency < maxConcurrency {
 		concurrency++
