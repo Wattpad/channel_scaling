@@ -55,29 +55,33 @@ func main() {
 func scaleTransactions(numTransactions int, limit int) {
 	fmt.Printf("Stage,Element,Step,Microseconds\n")
 
-	source := pipeline.NewSource("Stage 0", func() pipeline.Step { return pipeline.NewSourceStep() })
-	source.SetLimit(limit)
+	/*
+		To get a better comparison with pipelines, where each pipeline dequeues
+		the next message as soon as it begins processing the previous one, this
+		sets up each transaction with its own message queue.
+	*/
 
+	done := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := 0; i < numTransactions; i++ {
+		i := i
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 
-			// To level the playing field with pipelines, generate a new task as soon as one is dequeued.
-			buf := make(chan interface{})
-			go func() {
-				defer close(buf)
-				for x := range source.Out() {
-					buf <- x
-				}
-			}()
-
+			source := pipeline.NewSource("Stage 0", func() pipeline.Step {
+				step := pipeline.NewSourceStep()
+				step.SetInitial(i)
+				step.SetIncrement(numTransactions)
+				return step
+			})
+			source.SetLimit(limit)
 			step1 := pipeline.NewDelayStep(100 * time.Millisecond)
 			step2 := pipeline.NewDelayStep(200 * time.Millisecond)
 			step3 := pipeline.NewDelayStep(10 * time.Millisecond)
 			sink := pipeline.NewDelayStep(50 * time.Millisecond)
-			for x := range buf {
+			go source.Run(done)
+			for x := range source.Out() {
 				sink.Exec(step3.Exec(step2.Exec(step1.Exec(x))))
 				x := x.(pipeline.Item)
 				fmt.Printf("Stage 4,%d,Duration,%d\n", x.Id, time.Since(x.Start).Microseconds())
@@ -85,9 +89,7 @@ func scaleTransactions(numTransactions int, limit int) {
 		}()
 	}
 
-	done := make(chan struct{})
 	defer close(done)
-	go source.Run(done)
 
 	wg.Wait()
 }
