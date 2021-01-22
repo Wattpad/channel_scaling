@@ -93,7 +93,7 @@ func scaleTransactions(numTransactions int, limit int) {
 }
 
 func scalePipelines(maxConcurrency int, limit int) {
-	stepConcurrency := 5
+	stepConcurrency := 4
 	if maxConcurrency < stepConcurrency {
 		panic("Insufficient concurrency to start a pipeline")
 	}
@@ -137,7 +137,7 @@ func scalePipelines(maxConcurrency int, limit int) {
 }
 
 func scaleStages(maxConcurrency int, limit int, tuning Tuning) {
-	concurrency := 5
+	concurrency := 4
 	if maxConcurrency < concurrency {
 		panic("Insufficient concurrency to start a pipeline")
 	}
